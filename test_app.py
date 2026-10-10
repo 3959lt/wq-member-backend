@@ -113,6 +113,48 @@ class NetworkIntegration(unittest.TestCase):
    self.assertFalse(eligible(row,int(time.time())))
   self.assertEqual(user.get('/sub/'+token).status_code,403)
   self.assertEqual(admin.get('/admin/network').status_code,200)
+class PaymentFlow(unittest.TestCase):
+ def test_manual_payment(self):
+  import app as module,json
+  old=module.PAYMENT_CONFIG
+  with tempfile.TemporaryDirectory() as directory:
+   from pathlib import Path
+   Path(directory+'/alipay.jpg').write_bytes(b'test-image-only')
+   Path(directory+'/config.json').write_text(json.dumps({'url':'https://qr.alipay.com/test-only'}))
+   module.PAYMENT_CONFIG=directory+'/config.json'
+   try:
+    user=app.test_client();admin=app.test_client();outsider=app.test_client()
+    def post(client,path,data=None):
+     client.get('/login')
+     with client.session_transaction() as session: csrf=session['csrf']
+     return client.post(path,data={**(data or {}),'csrf':csrf})
+    post(user,'/login',{'email':'user@example.com','password':'changed-test-password'})
+    post(admin,'/login',{'email':'admin@example.com','password':'test-admin-password'})
+    response=post(user,'/order',{'plan':'1'})
+    self.assertEqual(response.status_code,302)
+    path=response.headers['Location'];self.assertTrue(path.endswith('/pay'))
+    oid=int(path.split('/')[2]);page=user.get(path)
+    self.assertEqual(page.status_code,200)
+    self.assertIn('https://qr.alipay.com/test-only',page.text)
+    self.assertEqual(outsider.get(path).status_code,302)
+    self.assertEqual(admin.get(path).status_code,404)
+    self.assertEqual(user.get('/payments/alipay/image').status_code,200)
+    self.assertEqual(outsider.get('/payments/alipay/image').status_code,302)
+    with app.app_context():
+     before=db().execute('SELECT expires FROM users WHERE id=2').fetchone()[0]
+     self.assertEqual(db().execute('SELECT status FROM orders WHERE id=?',(oid,)).fetchone()[0],'pending')
+    post(admin,'/admin/orders/'+str(oid)+'/approve')
+    post(admin,'/admin/orders/'+str(oid)+'/approve')
+    self.assertIn('会员有效期已更新',user.get(path).text)
+    with app.app_context():
+     self.assertGreaterEqual(db().execute('SELECT expires FROM users WHERE id=2').fetchone()[0],before+30*86400)
+    response=post(user,'/order',{'plan':'1'});path=response.headers['Location'];oid=int(path.split('/')[2])
+    post(user,'/orders/'+str(oid)+'/cancel')
+    self.assertNotIn('https://qr.alipay.com/test-only',user.get(path).text)
+    Path(directory+'/config.json').write_text(json.dumps({'url':'https://evil.example/test'}))
+    self.assertIsNone(module.payment_config())
+   finally: module.PAYMENT_CONFIG=old
+
 class RoutingRules(unittest.TestCase):
  def test_rules_and_permissions(self):
   from routing import routing_config, validate_rules, CATEGORIES

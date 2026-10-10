@@ -1,4 +1,4 @@
-# WQ Member Backend 0.4.1
+# WQ Member Backend 0.5.0
 
 Membership administration and authenticated VMess forwarding with Xray. Each ordinary user has an independent UUID. Membership expiry, account disabling, subscription disabling and cumulative traffic quotas are synchronized to the actual node. Mihomo compatibility has been tested.
 
@@ -39,3 +39,7 @@ Payment confirmation remains manual. Email verification, password recovery, stri
 ## Domain routing
 
 Subscriptions now export rule mode, service category selectors and domain/IP routing. Admins edit priority rules and category defaults on `/admin/routing`. See [routing guide](分流规则说明.md). Clients must refresh subscriptions and select rule mode.
+
+## Alipay collection QR
+
+Order checkout supports a privately configured Alipay collection QR with manual receipt confirmation. The payment page refreshes internal order status; it does not query Alipay or automatically confirm payments. See [setup](支付宝收款说明.md).

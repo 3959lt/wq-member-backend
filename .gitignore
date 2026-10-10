@@ -11,3 +11,6 @@ backups/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Private merchant QR image and payment configuration
+payment/

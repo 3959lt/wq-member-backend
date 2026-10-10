@@ -1,10 +1,12 @@
 import os, sqlite3, secrets, functools, time, re, hashlib
 import yaml
 import uuid, json
+from pathlib import Path
+from urllib.parse import urlparse
 from routing import ensure_routing, routing_config, validate_rules, CATEGORIES, category_default
 from network_state import ensure_tables, allocate_credentials, network_user, proxy_config
 from datetime import datetime, timezone, timedelta
-from flask import Flask, render_template, request, session, redirect, url_for, flash, abort, g
+from flask import Flask, render_template, request, session, redirect, url_for, flash, abort, g, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
@@ -12,6 +14,18 @@ app.config.update(SECRET_KEY=os.environ['APP_SECRET'], SESSION_COOKIE_NAME='wq_m
  SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE')=='1',
  PERMANENT_SESSION_LIFETIME=timedelta(hours=8), MAX_CONTENT_LENGTH=131072)
 DB=os.getenv('DATABASE_PATH', 'data/app.sqlite3')
+PAYMENT_CONFIG=os.getenv('PAYMENT_CONFIG',str(Path(DB).parent/'payment/config.json'))
+
+def payment_config():
+    try:
+        config=json.loads(Path(PAYMENT_CONFIG).read_text())
+        parsed=urlparse(config.get('url',''))
+        if parsed.scheme!='https' or parsed.hostname!='qr.alipay.com' or parsed.username or parsed.password: return None
+        image=Path(PAYMENT_CONFIG).parent/'alipay.jpg'
+        if not image.is_file(): return None
+        return {'url':config['url'],'image':image}
+    except (OSError,ValueError,TypeError): return None
+
 
 def db():
     if 'db' not in g:
@@ -157,9 +171,24 @@ def order():
     if db().execute("SELECT COUNT(*) FROM orders WHERE user_id=? AND status='pending'",(g.user['id'],)).fetchone()[0]>=3:
         db().rollback(); flash('最多保留 3 笔待确认订单，请先取消旧订单。','error')
     else:
-        db().execute('INSERT INTO orders(user_id,plan_name,cents,days,created) VALUES(?,?,?,?,?)',(g.user['id'],plan['name'],plan['cents'],plan['days'],int(time.time())))
-        audit('创建订单',plan['name']); db().commit(); flash('订单已创建，请联系管理员确认付款。网络服务尚未自动开通。')
+        created=db().execute('INSERT INTO orders(user_id,plan_name,cents,days,created) VALUES(?,?,?,?,?)',(g.user['id'],plan['name'],plan['cents'],plan['days'],int(time.time())))
+        audit('创建订单',plan['name']); db().commit(); flash('订单已创建，请按订单金额付款，到账后由管理员确认。')
+        return redirect(url_for('order_payment',oid=created.lastrowid))
     return redirect(url_for('dashboard'))
+
+@app.get('/orders/<int:oid>/pay')
+@require()
+def order_payment(oid):
+    record=db().execute('SELECT * FROM orders WHERE id=? AND user_id=?',(oid,g.user['id'])).fetchone()
+    if not record: abort(404)
+    return render_template('payment.html',order=record,payment=payment_config())
+
+@app.get('/payments/alipay/image')
+@require()
+def payment_image():
+    config=payment_config()
+    if not config: abort(404)
+    return send_file(config['image'],mimetype='image/jpeg')
 
 @app.post('/orders/<int:oid>/cancel')
 @require()
@@ -225,7 +254,7 @@ def password():
     return render_template('password.html')
 
 @app.get('/health')
-def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.4.1'}
+def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.5.0'}
 
 @app.errorhandler(400)
 @app.errorhandler(403)

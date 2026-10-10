@@ -1,0 +1,9 @@
+{% extends 'base.html' %}{% block head %}{% if order.status=='pending' %}<meta http-equiv="refresh" content="15">{% endif %}{% endblock %}{% block content %}
+<h1>支付宝付款</h1><div class="card"><h2>订单 #{{order.id}} · {{order.plan_name}}</h2><div class="price">¥{{'%.2f'|format(order.cents/100)}}</div><p>{{order.days}} 天会员有效期</p>
+{% if order.status=='paid' %}<div class="flash">管理员已确认收款，会员有效期已更新。</div><a class="button" href="{{url_for('dashboard')}}">返回会员中心</a>
+{% elif order.status=='cancelled' %}<div class="notice">订单已取消，请勿付款。已经付款的，请联系管理员核对。</div><a class="button" href="{{url_for('dashboard')}}">返回会员中心</a>
+{% elif payment %}<div class="notice">付款金额：¥{{'%.2f'|format(order.cents/100)}}；请备注「订单 #{{order.id}}」。这是固定收款码，金额和备注需要在支付宝中手动填写。请核对收款人后付款。</div>
+<p><a class="button" href="{{payment.url}}" target="_blank" rel="noopener noreferrer">打开支付宝收款页面</a></p><p class="small">手机可尝试打开上方链接；电脑请用支付宝扫一扫。链接能否唤起支付宝取决于设备和浏览器。</p>
+<img src="{{url_for('payment_image')}}" alt="支付宝收款码" style="display:block;width:100%;max-width:360px;margin:20px auto">
+<p>当前状态：待管理员核实到账。页面每 15 秒刷新一次订单状态，请勿重复付款。付款后联系管理员，提供订单编号、付款时间与支付宝交易单号供核对。</p><a href="{{url_for('order_payment',oid=order.id)}}">立即刷新状态</a>
+{% else %}<div class="notice">收款码尚未配置，请联系管理员获取付款方式。</div>{% endif %}</div>{% endblock %}
