@@ -59,6 +59,9 @@ def initialize():
             if not password: raise RuntimeError('ADMIN_PASSWORD required for initial setup')
             db().execute('INSERT INTO users(email,password,role,created) VALUES(?,?,?,?)',
                 (os.getenv('ADMIN_EMAIL','admin@example.com'),generate_password_hash(password),'admin',int(time.time())))
+        for table in ('plans','orders'):
+            if 'quota_bytes' not in [r[1] for r in db().execute('PRAGMA table_info('+table+')')]:
+                db().execute('ALTER TABLE '+table+' ADD COLUMN quota_bytes INTEGER')
         db().commit()
         ensure_tables(db())
         ensure_routing(db())
@@ -167,11 +170,13 @@ def dashboard():
 def order():
     plan=db().execute('SELECT * FROM plans WHERE id=? AND enabled=1',(request.form.get('plan'),)).fetchone()
     if not plan: abort(400)
+    if plan['quota_bytes'] is None:
+        flash('该套餐尚未配置流量额度，请联系管理员。','error');return redirect(url_for('dashboard'))
     db().execute('BEGIN IMMEDIATE')
     if db().execute("SELECT COUNT(*) FROM orders WHERE user_id=? AND status='pending'",(g.user['id'],)).fetchone()[0]>=3:
         db().rollback(); flash('最多保留 3 笔待确认订单，请先取消旧订单。','error')
     else:
-        created=db().execute('INSERT INTO orders(user_id,plan_name,cents,days,created) VALUES(?,?,?,?,?)',(g.user['id'],plan['name'],plan['cents'],plan['days'],int(time.time())))
+        created=db().execute('INSERT INTO orders(user_id,plan_name,cents,days,created,quota_bytes) VALUES(?,?,?,?,?,?)',(g.user['id'],plan['name'],plan['cents'],plan['days'],int(time.time()),plan['quota_bytes']))
         audit('创建订单',plan['name']); db().commit(); flash('订单已创建，请按订单金额付款，到账后由管理员确认。')
         return redirect(url_for('order_payment',oid=created.lastrowid))
     return redirect(url_for('dashboard'))
@@ -209,11 +214,26 @@ def plan_add():
         from decimal import Decimal, InvalidOperation
         price=Decimal(request.form.get('price','')); cents=int(price*100); days=int(request.form.get('days',''))
         name=request.form.get('name','').strip()
+        gib=int(request.form.get('gib',''))
+        if not 0<=gib<=1000000: raise ValueError()
         if not price.is_finite() or price*100!=cents or not 1<=cents<=100000000 or not 1<=days<=3650 or not 1<=len(name)<=80: raise ValueError()
     except (ValueError,InvalidOperation,OverflowError):
         flash('套餐名称、价格或天数不合法。','error'); return redirect(url_for('admin'))
-    db().execute('INSERT INTO plans(name,cents,days) VALUES(?,?,?)',(name,cents,days)); audit('添加套餐',name); db().commit()
+    db().execute('INSERT INTO plans(name,cents,days,quota_bytes) VALUES(?,?,?,?)',(name,cents,days,gib*1024**3)); audit('添加套餐',name); db().commit()
     flash('套餐已添加。'); return redirect(url_for('admin'))
+
+@app.post('/admin/plans/<int:pid>/quota')
+@require(True)
+def plan_quota(pid):
+    try:
+        gib=int(request.form.get('gib',''))
+        if not 0<=gib<=1000000: raise ValueError()
+    except ValueError:
+        flash('流量额度须为 0–1000000 GiB，0 表示不限量。','error');return redirect(url_for('admin'))
+    changed=db().execute('UPDATE plans SET quota_bytes=? WHERE id=?',(gib*1024**3,pid))
+    if not changed.rowcount: abort(404)
+    audit('设置套餐流量额度',pid);db().commit()
+    flash('套餐额度已保存；仅影响之后创建的订单。');return redirect(url_for('admin'))
 
 @app.post('/admin/plans/<int:pid>/toggle')
 @require(True)
@@ -228,10 +248,28 @@ def approve(oid):
     if not order:
         db().rollback(); flash('订单已处理，不会重复开通。','error')
     else:
+        quota=order['quota_bytes']
+        if quota is None:
+            try:
+                gib=int(request.form.get('gib',''))
+                if not 0<=gib<=1000000: raise ValueError()
+                quota=gib*1024**3
+            except ValueError:
+                db().rollback();flash('旧订单尚无流量额度，请填写本订单的 GiB 额度后确认。','error');return redirect(url_for('admin'))
+        allocate_credentials(db())
+        credential=db().execute('SELECT * FROM net_credentials WHERE user_id=?',(order['user_id'],)).fetchone()
+        if not credential:
+            db().rollback();flash('该账号不能分配网络凭证。','error');return redirect(url_for('admin'))
         now=int(time.time())
-        db().execute("UPDATE orders SET status='paid',approved=? WHERE id=?",(now,oid))
+        expiry=db().execute('SELECT expires FROM users WHERE id=?',(order['user_id'],)).fetchone()[0]
+        used=credential['up_bytes']+credential['down_bytes']
+        remaining=max(credential['quota_bytes']-used,0) if expiry>now and credential['quota_bytes'] else 0
+        limit=used+remaining+quota if quota else 0
+        db().execute('UPDATE net_credentials SET quota_bytes=?,enabled=1 WHERE user_id=?',(limit,order['user_id']))
+        db().execute('UPDATE subscriptions SET enabled=1 WHERE user_id=?',(order['user_id'],))
+        db().execute("UPDATE orders SET status='paid',approved=?,quota_bytes=? WHERE id=?",(now,quota,oid))
         db().execute('UPDATE users SET expires=MAX(expires,?)+? WHERE id=?',(now,order['days']*86400,order['user_id']))
-        audit('人工确认收款并延长会员',oid); db().commit(); flash('已记录收款并更新会员有效期。节点权限将由自动节点同步。')
+        audit('人工确认收款并延长会员',oid); db().commit(); flash('已记录收款并分配有效期和流量额度。节点权限将由自动节点同步。')
     return redirect(url_for('admin'))
 
 @app.post('/admin/users/<int:uid>/toggle')
@@ -254,7 +292,7 @@ def password():
     return render_template('password.html')
 
 @app.get('/health')
-def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.5.0'}
+def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.5.1'}
 
 @app.errorhandler(400)
 @app.errorhandler(403)

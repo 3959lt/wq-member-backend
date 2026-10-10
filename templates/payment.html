@@ -1,5 +1,5 @@
 {% extends 'base.html' %}{% block head %}{% if order.status=='pending' %}<meta http-equiv="refresh" content="15">{% endif %}{% endblock %}{% block content %}
-<h1>支付宝付款</h1><div class="card"><h2>订单 #{{order.id}} · {{order.plan_name}}</h2><div class="price">¥{{'%.2f'|format(order.cents/100)}}</div><p>{{order.days}} 天会员有效期</p>
+<h1>支付宝付款</h1><div class="card"><h2>订单 #{{order.id}} · {{order.plan_name}}</h2><div class="price">¥{{'%.2f'|format(order.cents/100)}}</div><p>{{order.days}} 天会员有效期 · {{'额度待配置' if order.quota_bytes is none else ('不限量' if order.quota_bytes==0 else ('%.0f'|format(order.quota_bytes/1073741824)+' GiB'))}}</p>
 {% if order.status=='paid' %}<div class="flash">管理员已确认收款，会员有效期已更新。</div><a class="button" href="{{url_for('dashboard')}}">返回会员中心</a>
 {% elif order.status=='cancelled' %}<div class="notice">订单已取消，请勿付款。已经付款的，请联系管理员核对。</div><a class="button" href="{{url_for('dashboard')}}">返回会员中心</a>
 {% elif payment %}<div class="notice">付款金额：¥{{'%.2f'|format(order.cents/100)}}；请备注「订单 #{{order.id}}」。这是固定收款码，金额和备注需要在支付宝中手动填写。请核对收款人后付款。</div>

@@ -16,7 +16,7 @@ class Flow(unittest.TestCase):
   self.assertEqual(user.get('/admin').status_code,403)
   post(admin,'/login',{'email':'admin@example.com','password':'test-admin-password'})
   self.assertEqual(admin.get('/admin').status_code,200)
-  post(admin,'/admin/plans',{'name':'测试套餐','price':'29.90','days':'30'})
+  post(admin,'/admin/plans',{'name':'测试套餐','price':'29.90','days':'30','gib':'100'})
   post(user,'/order',{'plan':'1'})
   post(admin,'/admin/nodes',{'name':'测试节点','host':'example.com','port':'443','protocol':'trojan'})
   config='proxies:\n  - name: 测试节点\n    type: trojan\n    server: example.com\n    port: 443\n    password: test-only-no-real-node\n'
@@ -186,4 +186,44 @@ class RoutingRules(unittest.TestCase):
   with app.app_context():
    self.assertEqual(db().execute('SELECT custom FROM routing_settings').fetchone()[0],rule)
    db().execute("UPDATE routing_settings SET custom='',baseline=1,choices='{}'");db().commit()
+class ZEntitlements(unittest.TestCase):
+ def test_snapshot_renewal_expiry_limits(self):
+  from network_state import eligible
+  admin=app.test_client();user=app.test_client();gib=1024**3
+  def post(c,path,data=None):
+   c.get('/login')
+   with c.session_transaction() as session: csrf=session['csrf']
+   return c.post(path,data={**(data or {}),'csrf':csrf})
+  post(admin,'/login',{'email':'admin@example.com','password':'test-admin-password'})
+  post(user,'/login',{'email':'user@example.com','password':'changed-test-password'})
+  with app.app_context():
+   db().execute('UPDATE users SET expires=? WHERE id=2',(int(time.time())+86400,))
+   db().execute('UPDATE net_credentials SET quota_bytes=?,up_bytes=?,down_bytes=0,enabled=0 WHERE user_id=2',(20*gib,5*gib))
+   db().execute('UPDATE subscriptions SET enabled=0 WHERE user_id=2');db().commit()
+   expiry=db().execute('SELECT expires FROM users WHERE id=2').fetchone()[0]
+  post(admin,'/admin/plans',{'name':'quota-test','price':'12.34','days':'7','gib':'10'})
+  with app.app_context(): pid=db().execute("SELECT id FROM plans WHERE name='quota-test'").fetchone()[0]
+  r=post(user,'/order',{'plan':str(pid)});oid=int(r.headers['Location'].split('/')[2])
+  post(admin,'/admin/plans/'+str(pid)+'/quota',{'gib':'99'})
+  post(user,'/admin/orders/'+str(oid)+'/approve');post(admin,'/admin/orders/'+str(oid)+'/approve')
+  with app.app_context():
+   row=db().execute('SELECT * FROM net_credentials WHERE user_id=2').fetchone()
+   self.assertEqual(row['quota_bytes'],30*gib);self.assertEqual(row['up_bytes'],5*gib);self.assertEqual(row['enabled'],1)
+   self.assertEqual(db().execute('SELECT expires FROM users WHERE id=2').fetchone()[0],expiry+7*86400)
+   self.assertEqual(db().execute('SELECT quota_bytes FROM orders WHERE id=?',(oid,)).fetchone()[0],10*gib)
+   self.assertEqual(db().execute('SELECT enabled FROM subscriptions WHERE user_id=2').fetchone()[0],1)
+  post(admin,'/admin/orders/'+str(oid)+'/approve')
+  with app.app_context():
+   self.assertEqual(db().execute('SELECT quota_bytes FROM net_credentials WHERE user_id=2').fetchone()[0],30*gib)
+   db().execute('UPDATE users SET expires=1 WHERE id=2');db().execute('UPDATE net_credentials SET up_bytes=?,quota_bytes=? WHERE user_id=2',(30*gib,30*gib));db().commit()
+  r=post(user,'/order',{'plan':str(pid)});oid=int(r.headers['Location'].split('/')[2]);post(admin,'/admin/orders/'+str(oid)+'/approve')
+  with app.app_context():
+   row=db().execute('SELECT c.*,u.enabled AS user_enabled,c.enabled AS credential_enabled,u.expires,s.enabled AS sub_enabled FROM net_credentials c JOIN users u ON u.id=c.user_id JOIN subscriptions s ON s.user_id=u.id WHERE c.user_id=2').fetchone()
+   self.assertEqual(row['quota_bytes'],129*gib);self.assertTrue(eligible(row,int(time.time())))
+   exhausted=dict(row);exhausted['up_bytes']=129*gib;self.assertFalse(eligible(exhausted,int(time.time())))
+   expired=dict(row);expired['expires']=1;self.assertFalse(eligible(expired,int(time.time())))
+  post(admin,'/admin/plans/'+str(pid)+'/quota',{'gib':'0'})
+  r=post(user,'/order',{'plan':str(pid)});oid=int(r.headers['Location'].split('/')[2]);post(admin,'/admin/orders/'+str(oid)+'/approve')
+  with app.app_context(): self.assertEqual(db().execute('SELECT quota_bytes FROM net_credentials WHERE user_id=2').fetchone()[0],0)
+
 if __name__=='__main__': unittest.main()
