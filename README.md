@@ -1,4 +1,4 @@
-# WQ Member Backend 0.3.0
+# WQ Member Backend 0.4.0
 
 Membership administration and authenticated VMess forwarding with Xray. Each ordinary user has an independent UUID. Membership expiry, account disabling, subscription disabling and cumulative traffic quotas are synchronized to the actual node. Mihomo compatibility has been tested.
 
@@ -35,3 +35,7 @@ Tests use a temporary database. Deployment verification covered actual Xray and 
 ## Limits
 
 Payment confirmation remains manual. Email verification, password recovery, strict device limits and per-user rate limiting are not implemented. Traffic accounting is approximate and may lose the final sampling interval after a node crash. Configure secure HTTPS subscription distribution, monitoring, load testing and off-server backups before production use.
+
+## Domain routing
+
+Subscriptions now export rule mode, service category selectors and domain/IP routing. Admins edit priority rules and category defaults on `/admin/routing`. See [routing guide](分流规则说明.md). Clients must refresh subscriptions and select rule mode.

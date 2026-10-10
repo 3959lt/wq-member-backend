@@ -113,4 +113,32 @@ class NetworkIntegration(unittest.TestCase):
    self.assertFalse(eligible(row,int(time.time())))
   self.assertEqual(user.get('/sub/'+token).status_code,403)
   self.assertEqual(admin.get('/admin/network').status_code,200)
+class RoutingRules(unittest.TestCase):
+ def test_rules_and_permissions(self):
+  from routing import routing_config, validate_rules, CATEGORIES
+  import yaml
+  admin=app.test_client();visitor=app.test_client()
+  self.assertEqual(visitor.get('/admin/routing').status_code,302)
+  admin.get('/login')
+  with admin.session_transaction() as session: csrf=session['csrf']
+  admin.post('/login',data={'csrf':csrf,'email':'admin@example.com','password':'test-admin-password'})
+  self.assertEqual(admin.get('/admin/routing').status_code,200)
+  with admin.session_transaction() as session: csrf=session['csrf']
+  rule='DOMAIN-SUFFIX,example.com,DIRECT'
+  response=admin.post('/admin/routing',data={'csrf':csrf,'custom':rule,'baseline':'1','choice_ChatGPT':'REJECT'})
+  self.assertEqual(response.status_code,302)
+  with app.app_context():
+   config=routing_config(db(),[{'name':'test-node'}])
+   self.assertEqual(config['mode'],'rule')
+   self.assertEqual(config['rules'][0],rule)
+   self.assertEqual(config['rules'][-1],'MATCH,服务节点')
+   self.assertGreater(len(config['rules']),3800)
+   self.assertEqual(next(g for g in config['proxy-groups'] if g['name']=='ChatGPT')['proxies'][0],'REJECT')
+   self.assertEqual(yaml.safe_load(yaml.safe_dump(config,allow_unicode=True)),config)
+  for invalid in ['DOMAIN-SUFFIX,https://example.com,DIRECT','MATCH,DIRECT','IP-CIDR,wrong,DIRECT','DOMAIN,x.com,unknown','DOMAIN,x.com,DIRECT,no-resolve']:
+   with self.assertRaises(ValueError): validate_rules(invalid)
+   self.assertEqual(admin.post('/admin/routing',data={'csrf':csrf,'custom':invalid}).status_code,400)
+  with app.app_context():
+   self.assertEqual(db().execute('SELECT custom FROM routing_settings').fetchone()[0],rule)
+   db().execute("UPDATE routing_settings SET custom='',baseline=1,choices='{}'");db().commit()
 if __name__=='__main__': unittest.main()

@@ -1,6 +1,7 @@
 import os, sqlite3, secrets, functools, time, re, hashlib
 import yaml
-import uuid
+import uuid, json
+from routing import ensure_routing, routing_config, validate_rules, CATEGORIES
 from network_state import ensure_tables, allocate_credentials, network_user, proxy_config
 from datetime import datetime, timezone, timedelta
 from flask import Flask, render_template, request, session, redirect, url_for, flash, abort, g
@@ -9,7 +10,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.config.update(SECRET_KEY=os.environ['APP_SECRET'], SESSION_COOKIE_NAME='wq_member_session', SESSION_COOKIE_HTTPONLY=True,
  SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE')=='1',
- PERMANENT_SESSION_LIFETIME=timedelta(hours=8), MAX_CONTENT_LENGTH=16384)
+ PERMANENT_SESSION_LIFETIME=timedelta(hours=8), MAX_CONTENT_LENGTH=131072)
 DB=os.getenv('DATABASE_PATH', 'data/app.sqlite3')
 
 def db():
@@ -46,6 +47,7 @@ def initialize():
                 (os.getenv('ADMIN_EMAIL','admin@example.com'),generate_password_hash(password),'admin',int(time.time())))
         db().commit()
         ensure_tables(db())
+        ensure_routing(db())
 
 @app.before_request
 def security():
@@ -223,7 +225,7 @@ def password():
     return render_template('password.html')
 
 @app.get('/health')
-def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.3.0'}
+def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.4.0'}
 
 @app.errorhandler(400)
 @app.errorhandler(403)
@@ -308,7 +310,7 @@ def subscription_download(token):
         if not c['enabled'] or not setting['enabled'] or not node or not node['enabled']: abort(403)
         if c['quota_bytes'] and c['up_bytes']+c['down_bytes']>=c['quota_bytes']: abort(403)
         proxies=[proxy_config(setting,c)]
-        config={'proxies':proxies,'proxy-groups':[{'name':'服务节点','type':'select','proxies':[p['name'] for p in proxies]}],'rules':['MATCH,服务节点']}
+        config=routing_config(db(),proxies)
         response=app.response_class(yaml.safe_dump(config,allow_unicode=True),mimetype='text/yaml')
         response.headers['Content-Disposition']='attachment; filename="subscription.yaml"'
         return response
@@ -317,10 +319,29 @@ def subscription_download(token):
     for p in yaml.safe_load(record['config'])['proxies']:
         if db().execute('SELECT 1 FROM nodes WHERE host=? AND port=? AND protocol=? AND enabled=1',(p['server'],p['port'],p['type'])).fetchone(): proxies.append(p)
     if not proxies: return '暂无可分发节点',503
-    config={'proxies':proxies,'proxy-groups':[{'name':'服务节点','type':'select','proxies':[p['name'] for p in proxies]}],'rules':['MATCH,服务节点']}
+    config=routing_config(db(),proxies)
     response=app.response_class(yaml.safe_dump(config,allow_unicode=True),mimetype='text/yaml')
     response.headers['Content-Disposition']='attachment; filename="subscription.yaml"'
     return response
+
+@app.route('/admin/routing',methods=['GET','POST'])
+@require(True)
+def routing_admin():
+    if request.method=='POST':
+        text=request.form.get('custom','')
+        try:
+            rules=validate_rules(text)
+            choices={name:request.form.get('choice_'+name,'服务节点') for name in CATEGORIES}
+            if any(value not in ('服务节点','DIRECT','REJECT') for value in choices.values()): raise ValueError('分类策略无效。')
+        except ValueError as error:
+            flash(str(error),'error')
+            return render_template('routing.html',custom=text,baseline=request.form.get('baseline')=='1',choices={name:request.form.get('choice_'+name,'服务节点') for name in CATEGORIES},categories=CATEGORIES),400
+        db().execute('UPDATE routing_settings SET custom=?,baseline=?,choices=? WHERE id=1',('\n'.join(rules),int(request.form.get('baseline')=='1'),json.dumps(choices,ensure_ascii=False)))
+        audit('routing.update','global');db().commit()
+        flash('分流规则已保存。请在客户端更新订阅，并选择规则模式。')
+        return redirect(url_for('routing_admin'))
+    row=db().execute('SELECT * FROM routing_settings WHERE id=1').fetchone()
+    return render_template('routing.html',custom=row['custom'],baseline=row['baseline'],choices=json.loads(row['choices']),categories=CATEGORIES)
 
 @app.get('/admin/network')
 @require(True)
