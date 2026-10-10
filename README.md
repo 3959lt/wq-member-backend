@@ -1,4 +1,4 @@
-# WQ Member Backend 0.4.0
+# WQ Member Backend 0.4.1
 
 Membership administration and authenticated VMess forwarding with Xray. Each ordinary user has an independent UUID. Membership expiry, account disabling, subscription disabling and cumulative traffic quotas are synchronized to the actual node. Mihomo compatibility has been tested.
 

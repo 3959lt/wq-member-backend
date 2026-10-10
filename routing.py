@@ -3,6 +3,11 @@ from pathlib import Path
 
 DEFAULT_RULES = json.loads(Path(__file__).with_name('routing-defaults.json').read_text())
 CATEGORIES = sorted({r.split(',')[2] for r in DEFAULT_RULES if r.split(',')[0]!='MATCH' and r.split(',')[2] not in ('DIRECT','REJECT','服务节点')})
+DIRECT_CATEGORIES = {'苹果服务','微软服务','哔哩哔哩','抖音'}
+
+def category_default(name):
+    return 'DIRECT' if name in DIRECT_CATEGORIES else '服务节点'
+
 TARGETS = {'DIRECT','REJECT','服务节点',*CATEGORIES}
 
 def ensure_routing(conn):
@@ -37,10 +42,12 @@ def routing_config(conn,proxies):
     choices=json.loads(settings['choices'])
     groups=[{'name':'服务节点','type':'select','proxies':[p['name'] for p in proxies]}]
     for category in CATEGORIES:
-        first=choices.get(category,'服务节点')
+        first=choices.get(category,category_default(category))
         options=[first]+[x for x in ('服务节点','DIRECT','REJECT') if x!=first]
         groups.append({'name':category,'type':'select','proxies':options})
     rules=validate_rules(settings['custom'])
-    if settings['baseline']: rules += [r for r in DEFAULT_RULES if not r.startswith('MATCH,')]
+    if settings['baseline']:
+        rules += ['GEOSITE,cn,DIRECT','GEOSITE,apple,苹果服务','GEOSITE,microsoft,微软服务']
+        rules += [r for r in DEFAULT_RULES if not r.startswith('MATCH,')]
     rules.append('MATCH,服务节点')
     return {'mode':'rule','log-level':'info','proxies':proxies,'proxy-groups':groups,'rules':rules}

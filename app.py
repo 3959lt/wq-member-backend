@@ -1,7 +1,7 @@
 import os, sqlite3, secrets, functools, time, re, hashlib
 import yaml
 import uuid, json
-from routing import ensure_routing, routing_config, validate_rules, CATEGORIES
+from routing import ensure_routing, routing_config, validate_rules, CATEGORIES, category_default
 from network_state import ensure_tables, allocate_credentials, network_user, proxy_config
 from datetime import datetime, timezone, timedelta
 from flask import Flask, render_template, request, session, redirect, url_for, flash, abort, g
@@ -225,7 +225,7 @@ def password():
     return render_template('password.html')
 
 @app.get('/health')
-def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.4.0'}
+def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.4.1'}
 
 @app.errorhandler(400)
 @app.errorhandler(403)
@@ -331,17 +331,17 @@ def routing_admin():
         text=request.form.get('custom','')
         try:
             rules=validate_rules(text)
-            choices={name:request.form.get('choice_'+name,'服务节点') for name in CATEGORIES}
+            choices={name:request.form.get('choice_'+name,category_default(name)) for name in CATEGORIES}
             if any(value not in ('服务节点','DIRECT','REJECT') for value in choices.values()): raise ValueError('分类策略无效。')
         except ValueError as error:
             flash(str(error),'error')
-            return render_template('routing.html',custom=text,baseline=request.form.get('baseline')=='1',choices={name:request.form.get('choice_'+name,'服务节点') for name in CATEGORIES},categories=CATEGORIES),400
+            return render_template('routing.html',custom=text,baseline=request.form.get('baseline')=='1',choices={name:request.form.get('choice_'+name,category_default(name)) for name in CATEGORIES},categories=CATEGORIES),400
         db().execute('UPDATE routing_settings SET custom=?,baseline=?,choices=? WHERE id=1',('\n'.join(rules),int(request.form.get('baseline')=='1'),json.dumps(choices,ensure_ascii=False)))
         audit('routing.update','global');db().commit()
         flash('分流规则已保存。请在客户端更新订阅，并选择规则模式。')
         return redirect(url_for('routing_admin'))
     row=db().execute('SELECT * FROM routing_settings WHERE id=1').fetchone()
-    return render_template('routing.html',custom=row['custom'],baseline=row['baseline'],choices=json.loads(row['choices']),categories=CATEGORIES)
+    return render_template('routing.html',custom=row['custom'],baseline=row['baseline'],choices={name:json.loads(row['choices']).get(name,category_default(name)) for name in CATEGORIES},categories=CATEGORIES)
 
 @app.get('/admin/network')
 @require(True)

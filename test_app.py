@@ -131,6 +131,9 @@ class RoutingRules(unittest.TestCase):
    config=routing_config(db(),[{'name':'test-node'}])
    self.assertEqual(config['mode'],'rule')
    self.assertEqual(config['rules'][0],rule)
+   self.assertEqual(config['rules'][1:4],['GEOSITE,cn,DIRECT','GEOSITE,apple,苹果服务','GEOSITE,microsoft,微软服务'])
+   for name in ('苹果服务','微软服务','哔哩哔哩','抖音'):
+    self.assertEqual(next(g for g in config['proxy-groups'] if g['name']==name)['proxies'][0],'DIRECT')
    self.assertEqual(config['rules'][-1],'MATCH,服务节点')
    self.assertGreater(len(config['rules']),3800)
    self.assertEqual(next(g for g in config['proxy-groups'] if g['name']=='ChatGPT')['proxies'][0],'REJECT')
