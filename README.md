@@ -40,4 +40,8 @@ No production credentials, database or user configurations are included.
 - Administrator initialization uses a database write transaction to prevent concurrent-worker races.
 - The health endpoint identifies the service and version.
 
-For SSH preview, use one consistent browser hostname. If a tab was open during deployment, refresh the login form. Public-IP access requires separate HTTPS and reverse-proxy deployment; this service binds localhost by default.
+For SSH preview, use one consistent browser hostname. If a tab was open during deployment, refresh the login form. Public-IP access requires separate HTTPS and reverse-proxy deployment; the systemd service now binds 0.0.0.0:8000; the local-run example remains localhost-only.
+
+## Public listener
+
+The systemd service listens on `0.0.0.0:8000`. Use the instance public IP with port 8000 in the browser. EC2 security groups must allow the port from the intended source IPs. Direct HTTP access is not encrypted; configure HTTPS before customer use.
