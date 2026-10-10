@@ -1,0 +1,8 @@
+[Unit]
+Description=Backup WQ database
+[Service]
+Type=oneshot
+User=wqbackend
+Group=wqbackend
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/wq-backend/backup.py
