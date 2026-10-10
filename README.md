@@ -1,4 +1,4 @@
-# WQ Member Backend 0.5.1
+# WQ Member Backend 0.6.0
 
 Membership administration and authenticated VMess forwarding with Xray. Each ordinary user has an independent UUID. Membership expiry, account disabling, subscription disabling and cumulative traffic quotas are synchronized to the actual node. Mihomo compatibility has been tested.
 
@@ -45,3 +45,7 @@ Subscriptions now export rule mode, service category selectors and domain/IP rou
 Order checkout supports a privately configured Alipay collection QR with manual receipt confirmation. The payment page refreshes internal order status; it does not query Alipay or automatically confirm payments. See [setup](支付宝收款说明.md).
 
 Manual receipt confirmation now assigns snapshotted plan duration and traffic allowance atomically. Set traffic allowances for existing plans before accepting new orders. Valid finite balances accumulate on renewal; expired balances do not carry over.
+
+## Member portal
+
+Responsive sidebar portal with real membership/traffic dashboard, dedicated plan and order pages, subscription copy action and client setup documents. Admins edit plan descriptions independently of order entitlement snapshots. No changes to node authentication or payment verification.

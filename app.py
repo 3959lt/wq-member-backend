@@ -62,6 +62,8 @@ def initialize():
         for table in ('plans','orders'):
             if 'quota_bytes' not in [r[1] for r in db().execute('PRAGMA table_info('+table+')')]:
                 db().execute('ALTER TABLE '+table+' ADD COLUMN quota_bytes INTEGER')
+        if 'description' not in [r[1] for r in db().execute('PRAGMA table_info(plans)')]:
+            db().execute("ALTER TABLE plans ADD COLUMN description TEXT NOT NULL DEFAULT ''")
         db().commit()
         ensure_tables(db())
         ensure_routing(db())
@@ -164,6 +166,31 @@ def logout(): session.clear(); return redirect(url_for('login'))
 @require()
 def dashboard():
     return render_template('dashboard.html',network=network_user(db(),g.user['id']),plans=db().execute('SELECT * FROM plans WHERE enabled=1 ORDER BY cents').fetchall(),orders=db().execute('SELECT * FROM orders WHERE user_id=? ORDER BY id DESC',(g.user['id'],)).fetchall(),subscription=db().execute("SELECT 1 FROM subscriptions WHERE user_id=? AND config!=''",(g.user['id'],)).fetchone())
+
+@app.get('/plans')
+@require()
+def plans_page():
+    return render_template('plans.html',plans=db().execute('SELECT * FROM plans WHERE enabled=1 ORDER BY cents').fetchall())
+
+@app.get('/orders')
+@require()
+def orders_page():
+    return render_template('orders.html',orders=db().execute('SELECT * FROM orders WHERE user_id=? ORDER BY id DESC',(g.user['id'],)).fetchall())
+
+@app.get('/docs')
+@require()
+def docs_page():
+    return render_template('docs.html')
+
+@app.post('/admin/plans/<int:pid>/description')
+@require(True)
+def plan_description(pid):
+    text=request.form.get('description','').strip()
+    if len(text)>1200:
+        flash('套餐介绍最多 1200 字。','error');return redirect(url_for('admin'))
+    changed=db().execute('UPDATE plans SET description=? WHERE id=?',(text,pid))
+    if not changed.rowcount: abort(404)
+    audit('更新套餐介绍',pid);db().commit();flash('套餐介绍已保存。');return redirect(url_for('admin'))
 
 @app.post('/order')
 @require()
@@ -292,7 +319,7 @@ def password():
     return render_template('password.html')
 
 @app.get('/health')
-def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.5.1'}
+def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.6.0'}
 
 @app.errorhandler(400)
 @app.errorhandler(403)

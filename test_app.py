@@ -138,7 +138,7 @@ class PaymentFlow(unittest.TestCase):
     self.assertIn('https://qr.alipay.com/test-only',page.text)
     self.assertEqual(outsider.get(path).status_code,302)
     self.assertEqual(admin.get(path).status_code,404)
-    self.assertEqual(user.get('/payments/alipay/image').status_code,200)
+    image=user.get('/payments/alipay/image');self.assertEqual(image.status_code,200);image.close()
     self.assertEqual(outsider.get('/payments/alipay/image').status_code,302)
     with app.app_context():
      before=db().execute('SELECT expires FROM users WHERE id=2').fetchone()[0]
@@ -225,5 +225,24 @@ class ZEntitlements(unittest.TestCase):
   post(admin,'/admin/plans/'+str(pid)+'/quota',{'gib':'0'})
   r=post(user,'/order',{'plan':str(pid)});oid=int(r.headers['Location'].split('/')[2]);post(admin,'/admin/orders/'+str(oid)+'/approve')
   with app.app_context(): self.assertEqual(db().execute('SELECT quota_bytes FROM net_credentials WHERE user_id=2').fetchone()[0],0)
+
+class ZZPortal(unittest.TestCase):
+ def test_pages_descriptions_and_access(self):
+  admin=app.test_client();user=app.test_client();visitor=app.test_client()
+  def post(c,path,data=None):
+   c.get('/login')
+   with c.session_transaction() as session: csrf=session['csrf']
+   return c.post(path,data={**(data or {}),'csrf':csrf})
+  for path in ('/dashboard','/plans','/orders','/docs'): self.assertEqual(visitor.get(path).status_code,302)
+  post(user,'/login',{'email':'user@example.com','password':'changed-test-password'})
+  post(admin,'/login',{'email':'admin@example.com','password':'test-admin-password'})
+  for c in (user,admin):
+   for path in ('/dashboard','/plans','/orders','/docs','/subscription-link'):
+    page=c.get(path);self.assertEqual(page.status_code,200);self.assertIn('购买套餐',page.text);self.assertIn('使用文档',page.text)
+  self.assertEqual(post(user,'/admin/plans/1/description',{'description':'unauthorized'}).status_code,403)
+  self.assertEqual(post(admin,'/admin/plans/1/description',{'description':'介绍 <script>alert(1)</script>'}).status_code,302)
+  page=user.get('/plans').text;self.assertIn('&lt;script&gt;',page);self.assertNotIn('<script>alert(1)</script>',page)
+  self.assertEqual(user.get('/static/portal.css').status_code,200)
+  self.assertEqual(user.get('/static/portal.js').status_code,200)
 
 if __name__=='__main__': unittest.main()
