@@ -76,4 +76,41 @@ class LoginRegression(unittest.TestCase):
   response=app.test_client().get('/login')
   self.assertIn('wq_member_session=',response.headers['Set-Cookie'])
   self.assertNotIn(' session=',response.headers['Set-Cookie'])
+class NetworkIntegration(unittest.TestCase):
+ def test_automatic_subscription_and_authorization(self):
+  from network_state import eligible
+  with app.app_context():
+   db().execute('DELETE FROM attempts')
+   db().execute("INSERT INTO nodes(name,host,port,protocol) VALUES('自动测试','example.net',443,'vmess')")
+   nid=db().execute("SELECT id FROM nodes WHERE host='example.net'").fetchone()[0]
+   db().execute('INSERT INTO net_settings(id,host,port,node_id) VALUES(1,?,?,?)',('example.net',443,nid));db().commit()
+  admin=app.test_client();user=app.test_client()
+  def post(client,path,data=None):
+   client.get('/login')
+   with client.session_transaction() as session: token=session['csrf']
+   return client.post(path,data={**(data or {}),'csrf':token})
+  post(admin,'/login',{'email':'admin@example.com','password':'test-admin-password'})
+  post(user,'/login',{'email':'user@example.com','password':'changed-test-password'})
+  self.assertEqual(user.get('/admin/network').status_code,403)
+  self.assertEqual(post(user,'/admin/network/users/2/action',{'action':'grant','days':'7'}).status_code,403)
+  post(admin,'/admin/network/users/2/action',{'action':'grant','days':'7'})
+  post(user,'/subscription/reset')
+  with user.session_transaction() as session: token=session['subscription_token']
+  response=user.get('/sub/'+token);self.assertEqual(response.status_code,200)
+  import yaml
+  first=yaml.safe_load(response.text)['proxies'][0]['uuid']
+  post(admin,'/admin/network/users/2/action',{'action':'rotate'})
+  second=yaml.safe_load(user.get('/sub/'+token).text)['proxies'][0]['uuid']
+  self.assertNotEqual(first,second)
+  post(admin,'/admin/network/users/2/action',{'action':'disable'})
+  self.assertEqual(user.get('/sub/'+token).status_code,403)
+  post(admin,'/admin/network/users/2/action',{'action':'enable'})
+  self.assertEqual(user.get('/sub/'+token).status_code,200)
+  post(admin,'/admin/network/users/2/action',{'action':'quota','gib':'1'})
+  with app.app_context():
+   db().execute('UPDATE net_credentials SET up_bytes=? WHERE user_id=2',(1024**3,));db().commit()
+   row=db().execute('SELECT c.*,u.enabled AS user_enabled,c.enabled AS credential_enabled,u.expires,s.enabled AS sub_enabled FROM net_credentials c JOIN users u ON u.id=c.user_id LEFT JOIN subscriptions s ON s.user_id=u.id WHERE c.user_id=2').fetchone()
+   self.assertFalse(eligible(row,int(time.time())))
+  self.assertEqual(user.get('/sub/'+token).status_code,403)
+  self.assertEqual(admin.get('/admin/network').status_code,200)
 if __name__=='__main__': unittest.main()

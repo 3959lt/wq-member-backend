@@ -1,5 +1,7 @@
 import os, sqlite3, secrets, functools, time, re, hashlib
 import yaml
+import uuid
+from network_state import ensure_tables, allocate_credentials, network_user, proxy_config
 from datetime import datetime, timezone, timedelta
 from flask import Flask, render_template, request, session, redirect, url_for, flash, abort, g
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -43,6 +45,7 @@ def initialize():
             db().execute('INSERT INTO users(email,password,role,created) VALUES(?,?,?,?)',
                 (os.getenv('ADMIN_EMAIL','admin@example.com'),generate_password_hash(password),'admin',int(time.time())))
         db().commit()
+        ensure_tables(db())
 
 @app.before_request
 def security():
@@ -141,7 +144,7 @@ def logout(): session.clear(); return redirect(url_for('login'))
 @app.get('/dashboard')
 @require()
 def dashboard():
-    return render_template('dashboard.html',plans=db().execute('SELECT * FROM plans WHERE enabled=1 ORDER BY cents').fetchall(),orders=db().execute('SELECT * FROM orders WHERE user_id=? ORDER BY id DESC',(g.user['id'],)).fetchall(),subscription=db().execute("SELECT 1 FROM subscriptions WHERE user_id=? AND config!=''",(g.user['id'],)).fetchone())
+    return render_template('dashboard.html',network=network_user(db(),g.user['id']),plans=db().execute('SELECT * FROM plans WHERE enabled=1 ORDER BY cents').fetchall(),orders=db().execute('SELECT * FROM orders WHERE user_id=? ORDER BY id DESC',(g.user['id'],)).fetchall(),subscription=db().execute("SELECT 1 FROM subscriptions WHERE user_id=? AND config!=''",(g.user['id'],)).fetchone())
 
 @app.post('/order')
 @require()
@@ -197,7 +200,7 @@ def approve(oid):
         now=int(time.time())
         db().execute("UPDATE orders SET status='paid',approved=? WHERE id=?",(now,oid))
         db().execute('UPDATE users SET expires=MAX(expires,?)+? WHERE id=?',(now,order['days']*86400,order['user_id']))
-        audit('人工确认收款并延长会员',oid); db().commit(); flash('已记录收款并更新会员有效期。节点权限尚未接入。')
+        audit('人工确认收款并延长会员',oid); db().commit(); flash('已记录收款并更新会员有效期。节点权限将由自动节点同步。')
     return redirect(url_for('admin'))
 
 @app.post('/admin/users/<int:uid>/toggle')
@@ -220,7 +223,7 @@ def password():
     return render_template('password.html')
 
 @app.get('/health')
-def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.2.0'}
+def health(): db().execute('SELECT 1'); return {'status':'ok','service':'wq-member-backend','version':'0.3.0'}
 
 @app.errorhandler(400)
 @app.errorhandler(403)
@@ -298,6 +301,17 @@ def subscription_download(token):
     record=db().execute('SELECT s.*,u.enabled AS user_enabled,u.expires FROM subscriptions s JOIN users u ON u.id=s.user_id WHERE token_hash=?',(hashlib.sha256(token.encode()).hexdigest(),)).fetchone()
     if not record: abort(404)
     if not record['enabled'] or not record['user_enabled'] or record['expires']<=int(time.time()): abort(403)
+    network=network_user(db(),record['user_id'])
+    if network['credential'] and network['settings']:
+        c=network['credential'];setting=network['settings']
+        node=db().execute('SELECT enabled FROM nodes WHERE id=?',(setting['node_id'],)).fetchone()
+        if not c['enabled'] or not setting['enabled'] or not node or not node['enabled']: abort(403)
+        if c['quota_bytes'] and c['up_bytes']+c['down_bytes']>=c['quota_bytes']: abort(403)
+        proxies=[proxy_config(setting,c)]
+        config={'proxies':proxies,'proxy-groups':[{'name':'服务节点','type':'select','proxies':[p['name'] for p in proxies]}],'rules':['MATCH,服务节点']}
+        response=app.response_class(yaml.safe_dump(config,allow_unicode=True),mimetype='text/yaml')
+        response.headers['Content-Disposition']='attachment; filename="subscription.yaml"'
+        return response
     if not record['config']: return '订阅尚未配置',503
     proxies=[]
     for p in yaml.safe_load(record['config'])['proxies']:
@@ -307,5 +321,44 @@ def subscription_download(token):
     response=app.response_class(yaml.safe_dump(config,allow_unicode=True),mimetype='text/yaml')
     response.headers['Content-Disposition']='attachment; filename="subscription.yaml"'
     return response
+
+@app.get('/admin/network')
+@require(True)
+def network_admin():
+    return render_template('network.html',settings=db().execute('SELECT * FROM net_settings WHERE id=1').fetchone(),runtime=db().execute('SELECT * FROM net_runtime WHERE id=1').fetchone(),users=db().execute("SELECT u.id,u.email,u.enabled,u.expires,c.uuid,c.enabled AS credential_enabled,c.quota_bytes,c.up_bytes,c.down_bytes FROM users u LEFT JOIN net_credentials c ON c.user_id=u.id WHERE u.role='user' ORDER BY u.id").fetchall())
+
+@app.post('/admin/network/users/<int:uid>/action')
+@require(True)
+def network_action(uid):
+    if not db().execute("SELECT 1 FROM users WHERE id=? AND role='user'",(uid,)).fetchone(): abort(404)
+    if not db().execute('SELECT 1 FROM net_settings WHERE id=1').fetchone(): abort(400)
+    action=request.form.get('action')
+    db().execute('BEGIN IMMEDIATE');allocate_credentials(db())
+    if action=='grant':
+        try:
+            days=int(request.form.get('days',''))
+            if not 1<=days<=3650: raise ValueError()
+        except ValueError:
+            db().rollback();flash('有效天数须为 1–3650。','error');return redirect(url_for('network_admin'))
+        db().execute('UPDATE users SET expires=MAX(expires,?)+? WHERE id=?',(int(time.time()),days*86400,uid))
+        db().execute('UPDATE net_credentials SET enabled=1 WHERE user_id=?',(uid,))
+        db().execute('UPDATE subscriptions SET enabled=1 WHERE user_id=?',(uid,))
+    elif action=='disable': db().execute('UPDATE net_credentials SET enabled=0 WHERE user_id=?',(uid,))
+    elif action=='enable': db().execute('UPDATE net_credentials SET enabled=1 WHERE user_id=?',(uid,))
+    elif action=='rotate': db().execute('UPDATE net_credentials SET uuid=? WHERE user_id=?',(str(uuid.uuid4()),uid))
+    elif action=='quota':
+        try:
+            gib=int(request.form.get('gib',''))
+            if not 0<=gib<=100000: raise ValueError()
+        except ValueError:
+            db().rollback();flash('流量额度须为 0–100000 GiB。','error');return redirect(url_for('network_admin'))
+        db().execute('UPDATE net_credentials SET quota_bytes=? WHERE user_id=?',(gib*1024**3,uid))
+    else: db().rollback();abort(400)
+    audit('节点授权操作 '+action,uid);db().commit();flash('已保存，通常 15–30 秒内同步至节点。权限变化会短暂重启节点并断开现有连接。');return redirect(url_for('network_admin'))
+
+@app.post('/admin/network/toggle')
+@require(True)
+def network_toggle():
+    db().execute('UPDATE net_settings SET enabled=1-enabled WHERE id=1');audit('切换自动节点状态',1);db().commit();return redirect(url_for('network_admin'))
 
 initialize()

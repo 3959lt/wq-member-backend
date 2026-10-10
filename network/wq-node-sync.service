@@ -1,0 +1,11 @@
+[Unit]
+Description=Synchronize membership authorization and traffic
+After=wq-backend.service
+[Service]
+Type=oneshot
+User=wqbackend
+Group=wqbackend
+SupplementaryGroups=wqxray
+ExecStart=/usr/bin/python3 /opt/wq-backend/network/node_sync.py
+UMask=0027
+TimeoutStartSec=45

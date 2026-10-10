@@ -1,0 +1,20 @@
+[Unit]
+Description=WQ authenticated forwarding node
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=wqxray
+Group=wqxray
+WorkingDirectory=/usr/local/lib/wq-xray
+ExecStart=/usr/local/lib/wq-xray/xray run -config /etc/wq-xray/config.json
+Restart=on-failure
+RestartSec=3
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+UMask=0077
+[Install]
+WantedBy=multi-user.target

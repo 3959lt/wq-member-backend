@@ -1,0 +1,8 @@
+[Unit]
+Description=Check membership and traffic every 15 seconds
+[Timer]
+OnBootSec=10
+OnUnitInactiveSec=15
+AccuracySec=1
+[Install]
+WantedBy=timers.target
